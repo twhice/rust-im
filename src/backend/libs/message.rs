@@ -18,6 +18,7 @@ pub enum MessageHead {
     Message,
     Display,
     SighUp,
+    UserList,
 }
 
 impl Message {
@@ -78,6 +79,8 @@ impl TryFrom<JsonValue> for Message {
             head = MessageHead::Message;
         } else if shead == string!("n") {
             head = MessageHead::SighUp;
+        } else if shead == string!("u") {
+            head = MessageHead::UserList;
         } else {
             return Err(());
         }
@@ -119,6 +122,7 @@ impl Display for MessageHead {
                 MessageHead::Message => "s",
                 MessageHead::Display => "d",
                 MessageHead::SighUp => "n",
+                MessageHead::UserList => "u",
             }
         )
     }

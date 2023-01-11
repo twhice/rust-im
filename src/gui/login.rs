@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc, sync::Arc, thread, time::Duration};
+use std::{cell::RefCell, rc::Rc, thread, time::Duration};
 
 use fltk::{
     app::App,
@@ -22,12 +22,13 @@ pub fn login(client: Client) {
 
         let img = Flex::new(0, 0, 200, 300, None).column();
         {
-            let mut head =
-                JpegImage::load("/home/twhicer/code/rust/learn/fl/src/head1.png").unwrap();
-            head.scale(180, 180, false, false);
+            // logo
+            let logo = include_bytes!("../img/xingxuan.jpg");
+            let mut logo = JpegImage::from_data(logo).unwrap();
+            logo.scale(180, 180, false, false);
 
             let mut frame = Frame::default().with_size(180, 180).center_of(&img);
-            frame.set_image(Some(head));
+            frame.set_image(Some(logo));
             frame.set_frame(FrameType::OFlatFrame);
         }
         img.end();

@@ -5,47 +5,55 @@ use crate::{
     string,
 };
 
-use super::*;
+use super::{libs::usergroup::Target, *};
 use std::{
     collections::HashMap,
     io::{self, ErrorKind, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::{
-        mpsc::{self, Receiver},
+        mpsc::{self, channel, Receiver, Sender},
         Arc, Mutex,
     },
-    thread::{self},
+    thread::{self, JoinHandle},
     time::Duration,
 };
 
+pub enum ServerCommand {}
 #[derive(Debug)]
 struct Server {
     // ID与密码
     user_lib: HashMap<usize, String>,
+    user_list: HashMap<usize, Target>,
     // 用户总量
     users: usize,
-    // 客户端
+    // 服务器线程
+    thread: JoinHandle<()>,
+    // IO
+    sender: Sender<ServerCommand>,
 }
 impl Server {
     pub fn start_server<T: ToSocketAddrs + Send + 'static>(ip: T) -> Arc<Mutex<Self>> {
+        let (s, command_recvier) = channel();
         let s = Self {
             user_lib: HashMap::new(),
             users: 1,
+            thread: thread::spawn(|| {}),
+            user_list: HashMap::new(),
+            sender: s,
         };
         let s = Arc::new(Mutex::new(s));
         let arc_self = s.clone();
         let mut clients: HashMap<usize, TcpStream> = HashMap::new();
 
-        thread::spawn(move || {
+        let thread = thread::spawn(move || {
+            // 服务器信息初始化
             let listener = TcpListener::bind(ip).log_expect("未能创建TcpListenier");
             listener
                 .set_nonblocking(true)
                 .log_expect("未能设置为非阻塞模式");
 
-            // 传递信息
+            // 沟通监听线程和服务器主线程
             let (msg_sc, msg_rc) = mpsc::channel();
-
-            // 客户端
 
             loop {
                 // 接受连接
@@ -54,7 +62,7 @@ impl Server {
                     let msg_sd = msg_sc.clone();
                     // let thread_self = arc_self.clone();
 
-                    // 子线程监听连接
+                    // 创建子线程处理连接
                     thread::spawn(move || loop {
                         // 缓冲区
                         let mut buffer = [0; MEG_SIZE];
@@ -89,15 +97,23 @@ impl Server {
                 // DEBUG
                 // println!("{:?}", self.user_lib);
 
-                // 处理
+                // 处理信息
                 let mut s = arc_self.lock().unwrap();
                 clients = s.try_solve_recv(&msg_rc, clients);
                 drop(s);
+
+                // 处理可能有的指令
+                if let Ok(command) = command_recvier.try_recv() {
+                    match command {}
+                }
 
                 // 转发消息
                 thread::sleep(Duration::from_millis(100));
             }
         });
+        {
+            s.lock().unwrap().thread = thread;
+        }
         s
     }
 
@@ -200,6 +216,10 @@ impl Server {
                 let new_id = self.users;
                 self.user_lib.insert(new_id, msg.msg.clone());
 
+                // 添加到用户表
+                let mut user = msg.from.clone();
+                user.set_id(new_id);
+                self.user_list.insert(new_id, user);
                 // 反馈id
                 send_message(
                     &mut hash.1,
@@ -221,6 +241,29 @@ impl Server {
                 Some(hash)
             }
 
+            // 客户端试图获取用户列表
+            libs::message::MessageHead::UserList => {
+                // 进度条(?)
+                let all = self.user_list.len();
+                let mut i = 0;
+                // 发送
+                for (_, user) in &self.user_list {
+                    let mut target = Target::default();
+                    target.set_id(i);
+                    send_message(
+                        &mut hash.1,
+                        Message::new(
+                            libs::message::MessageHead::UserList,
+                            user.clone(),
+                            target,
+                            all.to_string(),
+                        ),
+                    )
+                    .log();
+                    i += 1;
+                }
+                Some(hash)
+            }
             _ => Some(hash),
         }
     }
@@ -255,7 +298,7 @@ impl Server {
 
 fn send_message(stream: &mut TcpStream, msg: Message) -> io::Result<()> {
     // DEBUG
-    msg.log_with(format!("TO {}", msg.target.to_string()));
+    msg.log_with(format!("TO {}", stream.peer_addr().unwrap().to_string()));
 
     let mut bytes = json::stringify(msg.to_map()).into_bytes();
     bytes.resize(MEG_SIZE, 0);

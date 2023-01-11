@@ -4,6 +4,7 @@ use super::*;
 use crate::log::*;
 use crate::{backend::libs::usergroup::Target, string};
 
+use std::sync::mpsc::Receiver;
 use std::{
     fmt::Display,
     io::{ErrorKind, Read, Write},
@@ -20,17 +21,22 @@ struct Client {
     profile: Target,
     sender: Sender<Message>,
     pub login: bool,
+    pub wait: bool,
+    user_list_sender: Sender<(usize, Target)>,
 }
 impl Client {
     pub fn connect<T: ToSocketAddrs + Clone + Display + Send + 'static>(
         server_ip: T,
-    ) -> Arc<Mutex<Client>> {
+    ) -> (Arc<Mutex<Client>>, Receiver<(usize, Target)>) {
         let mut stream = connect_server(server_ip.clone());
         let (sender, recevier) = mpsc::channel::<Message>();
+        let (ul_sender, ul_recvier) = mpsc::channel();
         let s = Arc::new(Mutex::new(Self {
             profile: Default::default(),
             sender,
             login: false,
+            user_list_sender: ul_sender,
+            wait: false,
         }));
         let sc = s.clone();
         thread::spawn(move || loop {
@@ -75,7 +81,7 @@ impl Client {
             }
             thread::sleep(Duration::from_millis(10));
         });
-        s
+        (s, ul_recvier)
     }
     pub fn login<T1: AsStr, T2: AsStr>(
         &mut self,
@@ -146,17 +152,31 @@ impl Client {
     }
     fn resolve_message(&mut self, message: Message) {
         match message.head {
+            // 进行登录/注册
             libs::message::MessageHead::SighUp => {
                 self.login = true;
                 self.profile
                     .set_id(message.msg.parse().log_expect("服务器传回了无效的ID"))
             }
             libs::message::MessageHead::Login => self.login = true,
+
+            // 接受信息
             libs::message::MessageHead::Message => {
                 let from = message.from.get_name();
                 format!("<{}> {}", from, message.msg).log_with("Msg")
             }
+
+            // 服务器传来的警告
             libs::message::MessageHead::Display => message.msg.log_warn("Server"),
+
+            // 服务器传回用户列表
+            libs::message::MessageHead::UserList => {
+                self.wait = message.target.get_id() != message.msg.parse::<usize>().unwrap() - 1;
+                format!("wait: {}", self.wait).to_string().log_debug("RM");
+                self.user_list_sender
+                    .send((message.from.get_id(), message.from.clone()))
+                    .unwrap();
+            }
         }
     }
 }
