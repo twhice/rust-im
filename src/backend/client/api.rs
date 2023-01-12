@@ -1,10 +1,14 @@
-use crate::{backend::libs::usergroup::Target, log::Log, string};
+use crate::{
+    backend::libs::{message::Message, usergroup::Target},
+    log::Log,
+    string,
+};
 
 use super::super::libs::*;
 use super::Client as BasicClient;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{mpsc::Receiver, Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -15,14 +19,15 @@ const CLIENT: &str = "Client";
 pub struct Client {
     client: Arc<Mutex<BasicClient>>,
     user_list: Arc<Mutex<HashMap<usize, Target>>>,
-    // wait:Arc<Mutex<HashMap<usize,Target>>>
+    msg: Arc<Mutex<Receiver<Message>>>,
 }
 impl Client {
     pub fn new<T: AsAddr>(addr: T) -> Self {
-        let (s, r) = BasicClient::connect(addr);
+        let (s, r, msgr) = BasicClient::connect(addr);
         let s = Self {
             client: s,
             user_list: Arc::new(Mutex::new(HashMap::new())),
+            msg: Arc::new(Mutex::new(msgr)),
         };
         let s_clone = s.clone();
         thread::spawn(move || loop {
@@ -81,5 +86,9 @@ impl Client {
             drop(lock);
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    pub fn get_msg_recvier(&self) -> Arc<Mutex<Receiver<Message>>> {
+        self.msg.clone()
     }
 }

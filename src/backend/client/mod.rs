@@ -23,20 +23,27 @@ struct Client {
     pub login: bool,
     pub wait: bool,
     user_list_sender: Sender<(usize, Target)>,
+    clientmessage_senser: Sender<Message>,
 }
 impl Client {
     pub fn connect<T: ToSocketAddrs + Clone + Display + Send + 'static>(
         server_ip: T,
-    ) -> (Arc<Mutex<Client>>, Receiver<(usize, Target)>) {
+    ) -> (
+        Arc<Mutex<Client>>,
+        Receiver<(usize, Target)>,
+        Receiver<Message>,
+    ) {
         let mut stream = connect_server(server_ip.clone());
         let (sender, recevier) = mpsc::channel::<Message>();
         let (ul_sender, ul_recvier) = mpsc::channel();
+        let (msgsc_sender, msgrc_recvier) = mpsc::channel();
         let s = Arc::new(Mutex::new(Self {
             profile: Default::default(),
             sender,
             login: false,
-            user_list_sender: ul_sender,
             wait: false,
+            user_list_sender: ul_sender,
+            clientmessage_senser: msgsc_sender,
         }));
         let sc = s.clone();
         thread::spawn(move || loop {
@@ -68,6 +75,7 @@ impl Client {
             }
             match recevier.try_recv() {
                 Ok(msg) => {
+                    format!("{:?}", msg).log_with("To Server");
                     let mut buffer = json::stringify(msg.to_map()).to_string().into_bytes();
                     if buffer.len() <= 1024 {
                         buffer.resize(MEG_SIZE, 0);
@@ -81,7 +89,7 @@ impl Client {
             }
             thread::sleep(Duration::from_millis(10));
         });
-        (s, ul_recvier)
+        (s, ul_recvier, msgrc_recvier)
     }
     pub fn login<T1: AsStr, T2: AsStr>(
         &mut self,
@@ -163,7 +171,8 @@ impl Client {
             // 接受信息
             libs::message::MessageHead::Message => {
                 let from = message.from.get_name();
-                format!("<{}> {}", from, message.msg).log_with("Msg")
+                format!("<{}> {}", from, message.msg).log_with("Msg");
+                self.clientmessage_senser.send(message).unwrap();
             }
 
             // 服务器传来的警告
@@ -172,7 +181,7 @@ impl Client {
             // 服务器传回用户列表
             libs::message::MessageHead::UserList => {
                 self.wait = message.target.get_id() != message.msg.parse::<usize>().unwrap() - 1;
-                format!("wait: {}", self.wait).to_string().log_debug("RM");
+                // format!("wait: {}", self.wait).to_string().log_debug("RM");
                 self.user_list_sender
                     .send((message.from.get_id(), message.from.clone()))
                     .unwrap();
